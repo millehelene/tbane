@@ -46,7 +46,7 @@ KOLSÅSBANEN = ["Kolsås", "Hauger", "Gjettum", "Avløs", "Haslum", "Gjønnes",
                "Bekkestua", "Ringstabekk", "Jar", "Bjørnsletta", "Åsjordet",
                "Ullernåsen", "Montebello", "Smestad", "Borgen"]
 
-ØSTENSJØBANEN = ["Godlia", "Skøyenåsen", "Oppsal", "Ulsrud", "Bøler",
+ØSTENSJØBANEN = ["Hellerud", "Godlia", "Skøyenåsen", "Oppsal", "Ulsrud", "Bøler",
                  "Bogerud", "Skullerud", "Mortensrud"]
 
 # Grorudbanen fra Økern og ut til Vestli
