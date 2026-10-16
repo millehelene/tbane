@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="no">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>T-banespillet</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #161c23;
+    --tekst: #d8dee6;
+    --dempet: #7d8894;
+    --aksent: #f2a33a;   /* T-bane-oransje */
+    --svar: #7fd1a8;
+    --kant: #2a333d;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--tekst);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    display: flex;
+    flex-direction: column;
+    max-width: 820px;
+    margin: 0 auto;
+    padding: 16px;
+  }
+  #terminal {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: auto;
+    background: var(--panel);
+    border: 1px solid var(--kant);
+    border-radius: 10px;
+    padding: 14px;
+    white-space: pre;
+    font-size: clamp(9px, 2.3vw, 15px);
+    line-height: 1.45;
+  }
+  #terminal .svar { color: var(--svar); }
+  #terminal .feil { color: #ff7b72; }
+  form {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+  }
+  input {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    font-size: 16px;            /* hindrer zoom på iPhone */
+    padding: 12px;
+    background: var(--panel);
+    color: var(--tekst);
+    border: 1px solid var(--kant);
+    border-radius: 8px;
+  }
+  input:focus { outline: 2px solid var(--aksent); border-color: transparent; }
+  button {
+    font: inherit;
+    font-size: 15px;
+    padding: 12px 14px;
+    border: 0;
+    border-radius: 8px;
+    background: var(--aksent);
+    color: #1a1200;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.sekundaer { background: var(--kant); color: var(--tekst); }
+  button:disabled, input:disabled { opacity: .5; cursor: default; }
+  #nyRunde { display: none; margin-top: 10px; width: 100%; }
+</style>
+</head>
+<body>
+
+<div id="terminal">Laster Python i nettleseren … (tar noen sekunder første gang)
+</div>
+
+<form id="skjema" autocomplete="off">
+  <input id="felt" placeholder="Skriv svaret ditt her" disabled
+         autocapitalize="off" autocorrect="off" spellcheck="false">
+  <button type="button" id="hintKnapp" class="sekundaer" disabled>Hint</button>
+  <button type="submit" id="sendKnapp" disabled>OK</button>
+</form>
+<button id="nyRunde">Start spillet på nytt</button>
+
+<!--
+  Denne Python-koden kjører i nettleseren (via Pyodide). Den leser inn
+  tbanespill.py og gjør om input() slik at den venter på tekstfeltet over
+  i stedet for tastaturet i terminalen. Selve spillet trenger du ikke endre.
+-->
+<script type="text/python" id="oppstart">
+import ast, sys, js
+
+class TilSkjerm:
+    def write(self, tekst):
+        js.skrivUt(tekst)
+        return len(tekst)
+    def flush(self):
+        pass
+
+sys.stdout = TilSkjerm()
+sys.stderr = TilSkjerm()
+
+async def ainput(sporsmal=""):
+    print(sporsmal, end="")
+    return await js.ventPaaSvar()
+
+class GjorAsynkron(ast.NodeTransformer):
+    """Gjør spillets funksjoner om til async, og legger 'await' foran
+    input() og kall til disse funksjonene, slik at spillet kan vente
+    på svar fra nettsiden uten å fryse den."""
+    def __init__(self, navn):
+        self.navn = navn
+
+    def visit_FunctionDef(self, node):
+        self.generic_visit(node)
+        if node.name in self.navn:
+            ny = ast.AsyncFunctionDef(**{f: getattr(node, f) for f in node._fields})
+            return ast.copy_location(ny, node)
+        return node
+
+    def visit_Call(self, node):
+        self.generic_visit(node)
+        if isinstance(node.func, ast.Name):
+            if node.func.id == "input":
+                node.func = ast.Name(id="ainput", ctx=ast.Load())
+                return ast.copy_location(ast.Await(value=node), node)
+            if node.func.id in self.navn:
+                return ast.copy_location(ast.Await(value=node), node)
+        return node
+
+async def kjor_spill(kildekode):
+    tre = ast.parse(kildekode)
+    navn = {n.name for n in tre.body if isinstance(n, ast.FunctionDef)}
+    tre = ast.fix_missing_locations(GjorAsynkron(navn).visit(tre))
+    kode = compile(tre, "tbanespill.py", "exec",
+                   flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+    resultat = eval(kode, {"__name__": "__main__", "ainput": ainput})
+    if resultat is not None:
+        await resultat
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/pyodide@0.27.7/pyodide.js"></script>
+<script>
+  const terminal = document.getElementById("terminal");
+  const felt = document.getElementById("felt");
+  const skjema = document.getElementById("skjema");
+  const hintKnapp = document.getElementById("hintKnapp");
+  const sendKnapp = document.getElementById("sendKnapp");
+  const nyRunde = document.getElementById("nyRunde");
+
+  let ventende = null;
+
+  function leggTil(tekst, klasse) {
+    const node = klasse ? document.createElement("span") : document.createTextNode(tekst);
+    if (klasse) { node.className = klasse; node.textContent = tekst; }
+    terminal.appendChild(node);
+    terminal.scrollTop = terminal.scrollHeight;
+  }
+
+  window.skrivUt = (tekst) => leggTil(tekst);
+
+  window.ventPaaSvar = () => new Promise((resolve) => {
+    ventende = resolve;
+    felt.disabled = sendKnapp.disabled = hintKnapp.disabled = false;
+    felt.focus();
+  });
+
+  function send(tekst) {
+    if (!ventende) return;
+    leggTil(tekst + "\n", "svar");
+    const r = ventende;
+    ventende = null;
+    felt.value = "";
+    r(tekst);
+  }
+
+  skjema.addEventListener("submit", (e) => { e.preventDefault(); send(felt.value); });
+  hintKnapp.addEventListener("click", () => send("hint"));
+
+  let pyodide;
+
+  async function startSpill() {
+    nyRunde.style.display = "none";
+    terminal.textContent = "";
+    try {
+      const svar = await fetch("tbanespill.py", { cache: "no-store" });
+      if (!svar.ok) throw new Error("Fant ikke tbanespill.py ved siden av index.html");
+      const kilde = await svar.text();
+      await pyodide.globals.get("kjor_spill")(kilde);
+    } catch (feil) {
+      leggTil("\n" + feil + "\n", "feil");
+    }
+    felt.disabled = sendKnapp.disabled = hintKnapp.disabled = true;
+    nyRunde.style.display = "block";
+  }
+
+  nyRunde.addEventListener("click", startSpill);
+
+  (async () => {
+    try {
+      pyodide = await loadPyodide();
+      await pyodide.runPythonAsync(document.getElementById("oppstart").textContent);
+      startSpill();
+    } catch (feil) {
+      terminal.textContent = "Klarte ikke å starte Python: " + feil;
+    }
+  })();
+</script>
+</body>
+</html>
